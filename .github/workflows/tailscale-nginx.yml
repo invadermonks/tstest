@@ -28,39 +28,57 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nginx curl jq
 
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Start Tailscale daemon with proper state directory
+        run: |
+          # Create state directory for tailscale (needed for cert command)
+          sudo mkdir -p /var/lib/tailscale
+          
+          # Start tailscaled with proper state directory (not in-memory)
+          sudo tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+          
+          # Wait for daemon to be ready
+          sleep 5
+          
+          # Check daemon is running
+          sudo tailscale status || echo "Waiting for daemon..."
+          sleep 2
+
       - name: Connect to Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TS_AUTH_KEY }}
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TS_AUTH_KEY }} --hostname=github-runner-${{ github.run_id }}
 
       - name: Print Tailscale Debug Info
         run: |
           echo "=========================================="
           echo "TAILSCALE STATUS"
           echo "=========================================="
-          tailscale status
+          sudo tailscale status
           echo ""
           echo "=========================================="
           echo "TAILSCALE IP"
           echo "=========================================="
-          tailscale ip -4
-          tailscale ip -6
+          sudo tailscale ip -4
+          sudo tailscale ip -6 || echo "No IPv6"
           echo ""
           echo "=========================================="
           echo "TAILSCALE NETCHECK"
           echo "=========================================="
-          tailscale netcheck
+          sudo tailscale netcheck
           echo ""
           echo "=========================================="
           echo "TAILSCALE DEBUG INFO"
           echo "=========================================="
-          tailscale debug prefs
+          sudo tailscale debug prefs
           echo ""
           echo "=========================================="
           echo "HOSTNAME AND FQDN"
           echo "=========================================="
           hostname
-          tailscale status --json | jq -r '.Self.DNSName'
+          sudo tailscale status --json | jq -r '.Self.DNSName'
           echo ""
           echo "=========================================="
           echo "NETWORK INTERFACES"
@@ -76,7 +94,7 @@ jobs:
         id: fqdn
         run: |
           # Get the tailnet FQDN (remove trailing dot if present)
-          TAILNET_FQDN=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+          TAILNET_FQDN=$(sudo tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
           echo "fqdn=$TAILNET_FQDN" >> $GITHUB_OUTPUT
           echo "Tailnet FQDN: $TAILNET_FQDN"
 
@@ -85,10 +103,21 @@ jobs:
           FQDN="${{ steps.fqdn.outputs.fqdn }}"
           echo "Requesting SSL certificate for: $FQDN"
           
+          # Debug: Check tailscale state directory
+          echo ""
+          echo "=========================================="
+          echo "TAILSCALE STATE DIRECTORY DEBUG"
+          echo "=========================================="
+          ls -la /var/lib/tailscale/ || echo "State dir not found"
+          
           # Create directory for certs
           sudo mkdir -p /etc/nginx/ssl
           
+          # Wait a moment to ensure tailscale is fully connected
+          sleep 3
+          
           # Get the SSL certificate from Tailscale
+          echo "Running tailscale cert command..."
           sudo tailscale cert \
             --cert-file /etc/nginx/ssl/server.crt \
             --key-file /etc/nginx/ssl/server.key \
@@ -107,7 +136,7 @@ jobs:
       - name: Create Landing Page
         run: |
           FQDN="${{ steps.fqdn.outputs.fqdn }}"
-          TAILSCALE_IP=$(tailscale ip -4)
+          TAILSCALE_IP=$(sudo tailscale ip -4)
           
           sudo mkdir -p /var/www/html
           sudo tee /var/www/html/index.html > /dev/null <<EOF
@@ -249,7 +278,7 @@ jobs:
       - name: Print Access Information
         run: |
           FQDN="${{ steps.fqdn.outputs.fqdn }}"
-          TAILSCALE_IP=$(tailscale ip -4)
+          TAILSCALE_IP=$(sudo tailscale ip -4)
           KEEP_ALIVE="${{ github.event.inputs.keep_alive_minutes || '20' }}"
           
           echo ""
